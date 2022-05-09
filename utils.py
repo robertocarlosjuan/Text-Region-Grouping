@@ -5,7 +5,7 @@ import argparse
 import cv2
 print(cv2.__version__)
 from PIL import Image
-from config import ocr, font_path, sample_rate
+from config import ocr, font_path, sample_rate, iou_threshold, edge_threshold, full_video_threshold, edit_distance_leeway
 from paddleocr import draw_ocr
 from shapely.geometry import Polygon
 
@@ -36,9 +36,12 @@ def processImages(video_path, process, image_dir=None, save_frame=False):
     success,image = vidcap.read()
     success = True
     results = []
+    height = None
     while success:
         vidcap.set(cv2.CAP_PROP_POS_MSEC,(count*sample_rate)) 
         success,image = vidcap.read()
+        if height is None:
+            height, width, channels = image.shape
         if success:
             result = process(image)
             results.append(result)
@@ -48,7 +51,8 @@ def processImages(video_path, process, image_dir=None, save_frame=False):
                 output_path = os.path.join(image_dir,os.path.basename(output_name)) if image_dir is not None else output_name
                 cv2.imwrite(output_path, image)     # save frame as JPEG file
         count = count + 1
-    return results
+    
+    return results, height, width
 
 def get_intersection_over_union(pD, pG):
     return Polygon(pD).intersection(Polygon(pG)).area / Polygon(pD).union(Polygon(pG)).area
@@ -68,9 +72,25 @@ def levenshteinDistance(s1, s2):
         distances = distances_
     return distances[-1]
 
-def get_bbox_location_dict(results, threshold=0.98):
+def check_bbox_at_edge(bbox, height, width, threshold=0.15):
+    if type(bbox) == str:
+        bbox = json.loads(bbox)
+    for edge in bbox:
+        is_edge = [False, False]
+        if edge[0] < threshold*width or edge[0] > (1-threshold)*width:
+            is_edge[0] = True
+        if edge[1] < threshold*height or edge[1] > (1-threshold)*height:
+            is_edge[1] = True
+        if is_edge[0] and is_edge[1]:
+            return True
+    return False
+        
+
+
+def get_bbox_location_dict(results, threshold=0.5):
     # bbox_location {bbox_coords: [rec1, rec2, ...]}
     bbox_loc = {}
+    num_frames = 0
     for frame in results:
         for bbox_info in frame:
             bbox = json.dumps(bbox_info[0])
@@ -87,7 +107,22 @@ def get_bbox_location_dict(results, threshold=0.98):
                 bbox_loc[bbox_in_prev_frames].append(pred_text)
             else:
                 bbox_loc[bbox] = [pred_text]
-    return bbox_loc
+        if len(frame) > 0:
+            num_frames += 1
+    return bbox_loc, num_frames
+
+def find_channel(bbox_loc, num_frames, height, width, edge_threshold, full_video_threshold=0.7, edit_leeway=3):
+    # threshold: proportion of frames that have the bbox
+    channels = []
+    for bbox, pred_texts in bbox_loc.items():
+        # Check if bbox last throughout video
+        if len(pred_texts)/num_frames > full_video_threshold:
+            # Check if texts are the same
+            if all(levenshteinDistance(x, pred_texts[0])<=edit_leeway for x in pred_texts):
+                # Check if bbox at edges
+                if check_bbox_at_edge(bbox, height, width, edge_threshold):
+                    channels.append((json.loads(bbox), pred_texts))
+    return channels
                 
 
 def parse_args():
@@ -98,25 +133,20 @@ def parse_args():
 
 def main():
     args = parse_args()
-    results = processImages(args.video_path, detect_bounding)
-    bbox_loc = get_bbox_location_dict(results)
+    video_paths = [args.video_path] if os.path.isfile(args.video_path) else [os.path.join(args.video_path,v) for v in os.listdir(args.video_path)] 
+
+    for video_path in video_paths:
+        print(video_path)
+        results, height, width = processImages(video_path, detect_bounding)
+        print(results)
+        bbox_loc, num_frames = get_bbox_location_dict(results, threshold=iou_threshold)
+        print("NUM FRAMES: ", num_frames)
+        print(bbox_loc)
+        channels = find_channel(bbox_loc, num_frames, height, width, edge_threshold=edge_threshold, full_video_threshold=full_video_threshold, edit_leeway=edit_distance_leeway)
+        print(channels)
 
     # print(results)
-    print(bbox_loc)
+    # print(bbox_loc)
 
 main()
-
-# bbox_loc
-
-# {'[[79.0, 31.0], [161.0, 31.0], [161.0, 72.0], [79.0, 72.0]]': ['抖音'], 
-# '[[18.0, 88.0], [273.0, 94.0], [272.0, 122.0], [17.0, 116.0]]': ['抖音号：paitoudangan'], 
-# '[[20.0, 288.0], [700.0, 288.0], [700.0, 337.0], [20.0, 337.0]]': ['中国疫苗在新加坡受追捧', '中国疫苗在新加坡受追捧'], 
-# '[[30.0, 462.0], [178.0, 466.0], [177.0, 503.0], [29.0, 500.0]]': ['绝对军视'], 
-# '[[306.0, 645.0], [624.0, 566.0], [641.0, 637.0], [323.0, 716.0]]': ['SINOVAC'], 
-# '[[312.0, 713.0], [644.0, 657.0], [650.0, 693.0], [318.0, 748.0]]': ['科兴控股生物技术有限公司'], 
-# '[[315.0, 737.0], [648.0, 700.0], [651.0, 732.0], [319.0, 769.0]]': ['SINGVAC BIOTECH LTD'], 
-# '[[24.0, 457.0], [178.0, 463.0], [176.0, 504.0], [22.0, 498.0]]': ['绝对军视'], 
-# '[[328.0, 797.0], [373.0, 797.0], [373.0, 811.0], [328.0, 811.0]]': ['即就'], 
-# '[[564.0, 1168.0], [699.0, 1168.0], [699.0, 1220.0], [564.0, 1220.0]]': ['小抖音'], 
-# '[[446.0, 1232.0], [703.0, 1235.0], [703.0, 1261.0], [446.0, 1259.0]]': ['抖音号：paitoudangan']}
 
