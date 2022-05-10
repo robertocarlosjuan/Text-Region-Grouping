@@ -6,6 +6,6 @@ sample_rate = 50000 # sample every [sample_rate] miliseconds
 
 # Parameters
 iou_threshold = 0.5
-edge_threshold = 0.15
-full_video_threshold = 0.7
-edit_distance_leeway = 1
+edge_threshold = (0.35, 0.15)
+full_video_threshold = 0.65
+edit_distance_leeway = 2
