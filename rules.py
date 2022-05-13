@@ -12,9 +12,20 @@ def process(bbox_loc, num_frames, height, width, edge_threshold, full_video_thre
     rolling_captions = []
     scene_texts = []
     for bbox, pred_dict in bbox_loc.items():
-        pred_texts = [x[0] for x in pred_dict if x[1]=="iou"]
-        rc_pred_texts = [x[0] for x in pred_dict if x[1]=="vert_iou"]
-        combined = [x[0] for x in pred_dict]
+        pred_texts = []
+        rc_pred_texts = []
+        combined = []
+        static_frame_range = [None, None]
+        for x in pred_dict:
+            if x[1]=="iou":
+                pred_texts.append(x[0])
+                if static_frame_range[0] is None:
+                    static_frame_range[0] = x[2]
+                static_frame_range[1] = x[2]
+            if x[1]=="vert_iou":
+                rc_pred_texts.append(x[0])
+            combined.append(x[0])
+        frame_range = (pred_dict[0][2], pred_dict[-1][2])
         print(combined[0])
         print(bbox)
         # Check bbox_horizontal
@@ -35,11 +46,11 @@ def process(bbox_loc, num_frames, height, width, edge_threshold, full_video_thre
                         # Check if bbox at edges
                         if check_bbox_at_edge(bbox, height, width, edge_threshold):
                             print("Bounding box at the edge")
-                            channels.append((json.loads(bbox), pred_texts[0]))
+                            channels.append((json.loads(bbox), pred_texts[0], static_frame_range))
                             print("channels\n")
                         else:
                             print("Bounding box not at the edge")
-                            titles.append((json.loads(bbox), pred_texts[0]))
+                            titles.append((json.loads(bbox), pred_texts[0], static_frame_range))
                             print("titles\n")
                     else:
                         # Check if rolling captions
@@ -52,14 +63,14 @@ def process(bbox_loc, num_frames, height, width, edge_threshold, full_video_thre
                         print("Below: ", below)
                         print("is_rc_text: ", is_rc_text)
                         if below and is_rc_text:
-                            rolling_captions.append((json.loads(bbox), rc_pred_texts[0]))
+                            rolling_captions.append((json.loads(bbox), rc_pred_texts[0], frame_range))
                             print("rolling caption\n")
                         else:
-                            scene_texts.append((json.loads(bbox), combined[0]))
+                            scene_texts.append((json.loads(bbox), combined[0], frame_range))
                             print("scene_text\n")
                 else:
                     if prop_unzero>edit_sim: #avg_edit_sim >= edit_sim
-                        titles.append((json.loads(bbox), pred_texts[0]))
+                        titles.append((json.loads(bbox), pred_texts[0], static_frame_range))
                         print("titles\n")
                     else:
                         print("mostly vert_iou: ", len(rc_pred_texts)/num_frames > full_video_threshold)
@@ -69,17 +80,17 @@ def process(bbox_loc, num_frames, height, width, edge_threshold, full_video_thre
                         print("Below: ", below)
                         print("is_rc_text: ", is_rc_text)
                         if below and is_rc_text:
-                            rolling_captions.append((json.loads(bbox), rc_pred_texts[0]))
+                            rolling_captions.append((json.loads(bbox), rc_pred_texts[0], frame_range))
                             print("rolling caption\n")
                         else:
-                            scene_texts.append((json.loads(bbox), combined[0]))
+                            scene_texts.append((json.loads(bbox), combined[0], frame_range))
                             print("scene_text\n")
             else:
-                scene_texts.append((json.loads(bbox), combined[0]))
+                scene_texts.append((json.loads(bbox), combined[0], frame_range))
                 print("scene_text\n")
         else:
             print("not horizontal")
-            scene_texts.append((json.loads(bbox), combined[0]))
+            scene_texts.append((json.loads(bbox), combined[0], frame_range))
             print("scene_text\n")
     return channels, titles, rolling_captions, scene_texts
 

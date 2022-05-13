@@ -9,6 +9,7 @@ from Levenshtein import distance as lev
 import speech_recognition as sr
 from config import ocr
 from img_classifier.CLIP.demo import classify
+from utils import generate_xml
 
 def atoi(text):
     return int(text) if text.isdigit() else text
@@ -132,24 +133,6 @@ def plot_bbox(img, label_name, bbox, colour=(0, 255, 0)):
 
     return img
 
-def generate_xml(subtitle_bboxes, name_bboxes, base_filename, output_path):
-    xml_string = ['<detection_list>\n']
-    for bboxes, bbox_type in zip([subtitle_bboxes, name_bboxes], ['subtitle', 'name']):
-        xml_string.append('\t<detection type={}>\n'.format(bbox_type))
-        for bbox in bboxes:
-            xml_string.append('\t\t<frame start={} end={}>\n'.format(bbox[1][0], bbox[1][-1]))
-            xml_string.append('\t\t\t<bbox>\n\t\t\t\t<topleft>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</topleft>\n'.format(bbox[0][0], bbox[0][1]))
-            xml_string.append('\t\t\t\t<botright>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</botright>\n\t\t\t</bbox>\n'.format(bbox[0][2], bbox[0][-1]))
-            xml_string.append('\t\t\t<text>{}</text>\n<\t\t</frame>\n'.format(bbox[-1]))
-        xml_string.append('\t</detection>\n')
-    xml_string.append('</detection_list>')
-    xml_string = ''.join(xml_string)
-    xml_filename = "{}/{}.xml".format(output_path, base_filename)
-    xml_file = open(xml_filename, "w")
-    xml_file.write(xml_string)
-    xml_file.close()
-    print('Saved to {}'.format(xml_filename))
-
 def main(args):
     lang = args.lang
     input_path = args.input_path 
@@ -198,7 +181,7 @@ def main(args):
     frame_to_name = remove_duplicate_bbox(frame_to_subtitle, frame_to_name)
 
     # Generate XML output
-    generate_xml(subtitle_bboxes, name_bboxes, base_filename, output_path)
+    generate_xml([subtitle_bboxes, name_bboxes], ['subtitle', 'name'], base_filename, output_path)
 
     # Plot bboxes and output video
     for idx, frame in enumerate(frames):

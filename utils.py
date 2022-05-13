@@ -10,6 +10,7 @@ from PIL import Image
 from config import ocr, font_path, sample_rate
 from paddleocr import draw_ocr
 from shapely.geometry import Polygon
+import xml.etree.cElementTree as ET
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -19,10 +20,10 @@ def parse_args():
     return args
 
 def get_bbox_location_dict(results, threshold=0.5, rc_iou=0.5):
-    # bbox_location {bbox_coords: [rec1, rec2, ...]}
+    # bbox_location {bbox_coords: [(pred_text, conf), ...]}
     bbox_loc = {}
     num_frames = 0
-    for frame in results:
+    for frame_no, frame in enumerate(results):
         for bbox_info in frame:
             bbox = json.dumps(bbox_info[0])
             # Check if bbox is in previous frames
@@ -37,13 +38,14 @@ def get_bbox_location_dict(results, threshold=0.5, rc_iou=0.5):
                     for key in bbox_loc.keys():
                         vert_iou = get_vertical_iou(bbox_info[0], json.loads(key)) # Rolling Captions
                         if vert_iou > rc_iou:
-                            bbox_in_prev_frames = ("vert_iou", key)
+                            union_region = get_union_region(bbox_info[0], json.loads(key))
+                            bbox_in_prev_frames = ("vert_iou", union_region)
                             break
 
             if bbox_in_prev_frames is not None:
-                bbox_loc[bbox_in_prev_frames[1]].append((bbox_info[1], bbox_in_prev_frames[0]))
+                bbox_loc[bbox_in_prev_frames[1]].append((bbox_info[1], bbox_in_prev_frames[0], frame_no*sample_rate))
             else:
-                bbox_loc[bbox] = [(bbox_info[1], "iou")]
+                bbox_loc[bbox] = [(bbox_info[1], "iou", frame_no*sample_rate)]
         if len(frame) > 0:
             num_frames += 1
     return bbox_loc, num_frames    
@@ -100,7 +102,13 @@ def draw_bounding(img_path, ocr_bboxes, output_dir=None, label="_bbox"):
         output_path = output_dir
     im_show.save(output_path)
 
-# Find Channel
+def get_union_region(bbox1, bbox2):
+    top_left = (min(bbox1[0][0], bbox2[0][0]),min(bbox1[0][1], bbox2[0][1]))
+    top_right = (max(bbox1[1][0], bbox2[1][0]),min(bbox1[1][1], bbox2[1][1]))
+    bottom_right = (max(bbox1[2][0], bbox2[2][0]),max(bbox1[2][1], bbox2[2][1]))
+    bottom_left = (min(bbox1[3][0], bbox2[3][0]),max(bbox1[3][1], bbox2[3][1]))
+    return [top_left, top_right, bottom_right, bottom_left]
+
 def get_vertical_iou(pD, pG):
     min_pD = min([x[1] for x in pD])
     max_pD = max([x[1] for x in pD])
@@ -142,26 +150,6 @@ def norm_edit_sim(s1, s2):
         return 0
     else:
         return 1.0 / math.exp( d / (m - d) )
-
-def shortened_norm_edit_sim(s1, s2):
-    s1 = s1[0] if type(s1)==tuple else s1
-    s2 = s2[0] if type(s2)==tuple else s2
-    shorter = len(s1) if len(s1) < len(s2) else len(s2)
-    cut_off = math.ceil(shorter*0.8)
-    return norm_edit_sim(s1[cut_off*-1:], s2[:cut_off])
-
-# def maybe_is_rc(pred_texts, rc_text_thres=0.5):
-#     is_rc = 0
-#     not_rc = 0
-#     for i in range(len(pred_texts)-1):
-#         sim = norm_edit_sim(pred_texts[i][0], pred_texts[i+1][0])
-#         half_sim = shortened_norm_edit_sim(pred_texts[i][0], pred_texts[i+1][0])
-#         if half_sim > sim:
-#             is_rc += 1
-#         else:
-#             not_rc += 1
-#     norm_rc_likelihood = is_rc / (is_rc + not_rc)
-#     return True if norm_rc_likelihood > rc_text_thres else False
 
 def check_in(s1, s2):
     s2 = s2[:len(s1)]
@@ -258,6 +246,42 @@ def get_edit_similarities(pred_texts):
 def check_horizontal(bbox, threshold = 10):
     return abs(bbox[0][1] - bbox[1][1]) <= threshold and abs(bbox[2][1] - bbox[3][1]) <= threshold
 
+def generate_xml(bboxes_all_types, types, base_filename, output_path):
+    # bbox format [[topleftx, toplefty,botrightx, botrighty], [frame_start, ..., frame_end], [text]]
+    xml_string = ['<detection_list>\n']
+    for bboxes, bbox_type in zip(bboxes_all_types, types):
+        xml_string.append('\t<detection type={}>\n'.format(bbox_type))
+        for bbox in bboxes:
+            xml_string.append('\t\t<frame start={} end={}>\n'.format(bbox[1][0], bbox[1][-1]))
+            xml_string.append('\t\t\t<bbox>\n\t\t\t\t<topleft>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</topleft>\n'.format(bbox[0][0], bbox[0][1]))
+            xml_string.append('\t\t\t\t<botright>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</botright>\n\t\t\t</bbox>\n'.format(bbox[0][2], bbox[0][-1]))
+            xml_string.append('\t\t\t<text>{}</text>\n<\t\t</frame>\n'.format(bbox[-1]))
+        xml_string.append('\t</detection>\n')
+    xml_string.append('</detection_list>')
+    xml_string = ''.join(xml_string)
+    xml_filename = "{}/{}.xml".format(output_path, base_filename)
+    xml_file = open(xml_filename, "w")
+    xml_file.write(xml_string)
+    xml_file.close()
+    print('Saved to {}'.format(xml_filename))
 
 
+# def shortened_norm_edit_sim(s1, s2):
+#     s1 = s1[0] if type(s1)==tuple else s1
+#     s2 = s2[0] if type(s2)==tuple else s2
+#     shorter = len(s1) if len(s1) < len(s2) else len(s2)
+#     cut_off = math.ceil(shorter*0.8)
+#     return norm_edit_sim(s1[cut_off*-1:], s2[:cut_off])
 
+# def maybe_is_rc(pred_texts, rc_text_thres=0.5):
+#     is_rc = 0
+#     not_rc = 0
+#     for i in range(len(pred_texts)-1):
+#         sim = norm_edit_sim(pred_texts[i][0], pred_texts[i+1][0])
+#         half_sim = shortened_norm_edit_sim(pred_texts[i][0], pred_texts[i+1][0])
+#         if half_sim > sim:
+#             is_rc += 1
+#         else:
+#             not_rc += 1
+#     norm_rc_likelihood = is_rc / (is_rc + not_rc)
+#     return True if norm_rc_likelihood > rc_text_thres else False
