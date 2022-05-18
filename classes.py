@@ -1,10 +1,14 @@
 import os
 import cv2
+import subprocess
 import numpy as np
+import speech_recognition as sr
+
 from config import *
 from utils import *
-from shapely.geometry import Polygon
 from sklearn.cluster import KMeans
+from shapely.geometry import Polygon
+from Levenshtein import distance as lev
 
 class BoundingBoxInstance:
     def __init__(self, coords, frame, text, conf, type=None):
@@ -21,11 +25,31 @@ class BoundingBoxInstance:
         return abs(self.coords[0][1] - self.coords[1][1]) <= hor_leeway and abs(self.coords[2][1] - self.coords[3][1]) <= hor_leeway
 
     def overlaps(self, new_coords):
-        union_area = Polygon(self.coords).union(Polygon(new_coords)).area
-        # if union_area - Polygon(self.coords).area == 0 or union_area - Polygon(new_coords).area < 10:
-        #     return True
-        iou = Polygon(self.coords).intersection(Polygon(new_coords)).area / union_area
-        return iou > iou_threshold
+        # union_area = Polygon(self.coords).union(Polygon(new_coords)).area
+        # # if union_area - Polygon(self.coords).area == 0 or union_area - Polygon(new_coords).area < 10:
+        # #     return True
+        # iou = Polygon(self.coords).intersection(Polygon(new_coords)).area / union_area
+        # return iou > iou_threshold
+        mismatch = False
+        x_margin = 100
+        y_margin = 10
+        # coords = [item for sublist in self.coords for item in sublist]
+        # new_coords = [item for sublist in new_coords for item in sublist]
+        coords = [self.coords[0][0], self.coords[0][1], self.coords[2][0], self.coords[2][1]]
+        new_coords = [new_coords[0][0], new_coords[0][1], new_coords[2][0], new_coords[2][1]]
+        for i, (p, c) in enumerate(zip(coords, new_coords)):
+            if i%2 == 0:
+                margin = x_margin
+            else:
+                margin = y_margin
+            
+            if abs(p-c) <= margin:
+                continue
+            else:
+                mismatch = True
+                break
+
+        return not mismatch
 
     def get_cropped_image(self, frame, coords):
         plot_coords = get_plot_coords(coords)
@@ -401,13 +425,14 @@ class BoundingBoxGroup:
             return False
 
 class Video:
-    def __init__(self, video_path):
+    def __init__(self, video_path, audio_save_path):
         self.video_path = video_path
         self.base_filename = os.path.splitext(os.path.basename(self.video_path))[0]
         self.bboxes = None
         self.height = None
         self.width = None
         self.frames = self.generate_frames()
+        self.lang = 'ch'
 
     def generate_frames(self):
         vidcap = cv2.VideoCapture(self.video_path)
@@ -475,15 +500,65 @@ class Video:
         out.release()
         cap.release()
 
-def run(video_paths): 
+    def check_subtitles(self):
+        r = sr.Recognizer()
+        base_filename = self.video_path.split('/')[-1].split('.')[0]
+        # Convert mp4 file to wav file
+        audio_file = '{}/{}.wav'.format(audio_save_path, base_filename)
+        if not os.path.exists(audio_file):
+            ffmpeg_command = 'ffmpeg -i {}/{}.mp4 {}'.format(self.video_path, audio_file)
+            call_ffmpeg = subprocess.Popen(ffmpeg_command, universal_newlines=True, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            f1 = call_ffmpeg.stdout.read()
+            f2 = call_ffmpeg.wait()
+
+        temp = sr.AudioFile(audio_file)
+        with temp as source:
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            temp_audio = r.record(source)
+
+        if self.lang == 'eng':
+            try:
+                pred_text = r.recognize_google(temp_audio)#, language='en-SG')
+            except sr.UnknownValueError:
+                pred_text = ''
+            lev_threshold = 10
+            joiner = ' '
+        elif self.lang == 'ch':
+            try:
+                pred_text = r.recognize_google(temp_audio, language='zh')
+            except sr.UnknownValueError:
+                pred_text = ''
+            lev_threshold = 5
+            joiner = ''
+
+        print('ASR', pred_text, '\n')
+        subtitle_bboxes = []
+        for i, bbox in enumerate(self.bboxes):
+            text = [sub_bbox.text for sub_bbox in bbox.bboxes]
+            distinct_text = []
+            [distinct_text.append(x) for x in text if x not in distinct_text]
+            distinct_text = joiner.join(distinct_text)
+            if len(distinct_text) > 20:
+                print('OCR {}:'.format(i), distinct_text, '\n')
+            # text_dict[i] = joiner.join(distinct_text)
+            if lev(pred_text, distinct_text) < lev_threshold:
+                subtitle_bboxes.append([i, [sub_bbox.coords for sub_bbox in bbox.bboxes]])
+        
+        return subtitle_bboxes
+
+def run(video_paths, audio_save_path): 
+    
     for video_path in video_paths:
-        out_dir = "/home/hcari/trg/visualize"
-        video = Video(video_path)
+        # out_dir = "/home/hcari/trg/visualize"
+        video = Video(video_path, audio_save_path)
         video.generate_bboxes()
         video.first_stage_classify_bboxes()
         video.merge_bboxes()
-        video.save_to_video(out_dir)
+        subtitle_bboxes = video.check_subtitles()
+        print(subtitle_bboxes)
+        # video.save_to_video(out_dir)
 
-video_dir = "/home/hcari/trg/videos/"
+video_dir = "../montage_detection/sinovac_ver/query_video"
+audio_save_path = '../non_commit_trg/audio'
 video_paths = [os.path.join(video_dir, x) for x in os.listdir(video_dir)]
-run(video_paths)
+run(video_paths, audio_save_path)
