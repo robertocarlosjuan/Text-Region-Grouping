@@ -9,7 +9,7 @@ from Levenshtein import distance as lev
 import speech_recognition as sr
 from config import ocr
 from img_classifier.CLIP.demo import classify
-from utils import generate_xml
+from utils import generate_xml, plot_bbox
 
 def atoi(text):
     return int(text) if text.isdigit() else text
@@ -124,14 +124,6 @@ def find_name_bbox(frame_to_name, name_bboxes, frame_range, num_frames, bbox, fp
                 frame_to_name[i].append(bbox[0])
     
     return frame_to_name
-
-def plot_bbox(img, label_name, bbox, colour=(0, 255, 0)):
-    (w, h), _ = cv2.getTextSize(label_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-    img = cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[-1])), colour, 2)
-    img = cv2.rectangle(img, (int(bbox[0]), int(bbox[1]) - 20), (int(bbox[0]) + w, int(bbox[1])), colour, -1)
-    img = cv2.putText(img, label_name, (int(bbox[0]), int(bbox[1]) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-
-    return img
 
 def main(args):
     lang = args.lang
