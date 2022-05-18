@@ -7,7 +7,7 @@ import statistics
 import numpy as np
 import cv2
 from PIL import Image
-from config import ocr, font_path, sample_rate
+from config import ocr, font_path, sample_rate, colours
 from paddleocr import draw_ocr
 from shapely.geometry import Polygon
 import xml.etree.cElementTree as ET
@@ -27,19 +27,21 @@ def get_bbox_location_dict(results, threshold=0.5, rc_iou=0.5):
         for bbox_info in frame:
             bbox = json.dumps(bbox_info[0])
             # Check if bbox is in previous frames
-            bbox_in_prev_frames = ("iou",bbox) if bbox in bbox_loc.keys() else None
+            bbox_in_prev_frames = ["iou",bbox] if bbox in bbox_loc.keys() else None
             if bbox_in_prev_frames is None:
                 for key in bbox_loc.keys():
                     iou = get_intersection_over_union(bbox_info[0], json.loads(key))
                     if iou > threshold: # Channel, title
-                        bbox_in_prev_frames = ("iou", key)
+                        bbox_in_prev_frames = ["iou", key]
                         break
                 if bbox_in_prev_frames is None:
                     for key in bbox_loc.keys():
                         vert_iou = get_vertical_iou(bbox_info[0], json.loads(key)) # Rolling Captions
                         if vert_iou > rc_iou:
                             union_region = get_union_region(bbox_info[0], json.loads(key))
-                            bbox_in_prev_frames = ("vert_iou", union_region)
+                            bbox_in_prev_frames = ["vert_iou", json.dumps(union_region)]
+                            bbox_loc[bbox_in_prev_frames[1]] = bbox_loc.pop(key)
+                            bbox_loc[bbox_in_prev_frames[1]].append((bbox_info[1], json.dumps(bbox_info[0]), frame_no*sample_rate))
                             break
 
             if bbox_in_prev_frames is not None:
@@ -60,6 +62,7 @@ def processImages(video_path, process, image_dir=None, num_frames_to_save = 1):
     output_path = None
     height = None
     save_frame = 0
+    frames = []
     while success:
         vidcap.set(cv2.CAP_PROP_POS_MSEC,(count*sample_rate)) 
         success,image = vidcap.read()
@@ -68,6 +71,7 @@ def processImages(video_path, process, image_dir=None, num_frames_to_save = 1):
         if success:
             result = process(image)
             results.append(result)
+            frames.append(image)
             if save_frame < num_frames_to_save:
                 output_count = "_%d" % count
                 output_name = os.path.splitext(video_path)[0] + output_count + ".jpeg"
@@ -76,7 +80,7 @@ def processImages(video_path, process, image_dir=None, num_frames_to_save = 1):
                 save_frame += 1
         count = count + 1
     
-    return results, height, width, output_path
+    return results, height, width, frames
 
 # PaddleOCR
 def detect_bounding(img_name):
@@ -102,12 +106,42 @@ def draw_bounding(img_path, ocr_bboxes, output_dir=None, label="_bbox"):
         output_path = output_dir
     im_show.save(output_path)
 
+def height(bbox):
+    return bbox[2][1]-bbox[0][1]
+
+def width(bbox):
+    return bbox[2][0]-bbox[0][0]
+
 def get_union_region(bbox1, bbox2):
+    # area1 = height(bbox1)*width(bbox1)
+    # area2 = height(bbox2)*width(bbox2)
+    # if area1 > area2:
+    #     return bbox1
+    # else:
+    #     return bbox2
     top_left = (min(bbox1[0][0], bbox2[0][0]),min(bbox1[0][1], bbox2[0][1]))
     top_right = (max(bbox1[1][0], bbox2[1][0]),min(bbox1[1][1], bbox2[1][1]))
     bottom_right = (max(bbox1[2][0], bbox2[2][0]),max(bbox1[2][1], bbox2[2][1]))
     bottom_left = (min(bbox1[3][0], bbox2[3][0]),max(bbox1[3][1], bbox2[3][1]))
     return [top_left, top_right, bottom_right, bottom_left]
+
+def get_horizontal_union_region(bbox1, bbox2):
+    top_left = (min(bbox1[0][0], bbox2[0][0]),bbox1[0][1])
+    top_right = (max(bbox1[1][0], bbox2[1][0]),bbox1[1][1])
+    bottom_right = (max(bbox1[2][0], bbox2[2][0]),bbox1[2][1])
+    bottom_left = (min(bbox1[3][0], bbox2[3][0]),bbox1[3][1])
+    return [top_left, top_right, bottom_right, bottom_left]
+
+def get_plot_coords(coords):
+    x_values = [x[0] for x in coords]
+    y_values = [x[1] for x in coords]
+    return [min(x_values), min(y_values), max(x_values), max(y_values)]
+
+def get_distance(point1, point2):
+    return np.sqrt(np.square(point1 - point2).sum())
+
+def get_centroid(point_list):
+    return np.median(point_list, axis=0)
 
 def get_vertical_iou(pD, pG):
     min_pD = min([x[1] for x in pD])
@@ -125,6 +159,40 @@ def get_vertical_iou(pD, pG):
 
 def get_intersection_over_union(pD, pG):
     return Polygon(pD).intersection(Polygon(pG)).area / Polygon(pD).union(Polygon(pG)).area
+
+def check_rc_by_text(rc):
+    rc_sorted = sorted(rc, key=len)
+    clusters = {}
+    rejected = []
+    for item in rc_sorted:
+        item_in_clusters = False
+        for key in clusters.keys():
+            if check_in(item, key):
+                clusters[key] += 1
+                item_in_clusters = True
+                break
+        if not item_in_clusters:
+            for i in range(len(rc_sorted)-1,0,-1):
+                key = rc_sorted[i]
+                if check_in(item, key):
+                    clusters[key] = 1
+                    item_in_clusters = True
+                    break
+        if not item_in_clusters:
+            rejected.append(item)
+    refined_clusters = [(k,v) for k, v in clusters.items() if v>1 and v!=max(clusters.values())]
+    return len(refined_clusters)>0
+
+def diff_density(pred_texts):
+    edit_similarities = []
+    for i in range(len(pred_texts)-1):
+        edit_similarity = norm_edit_sim(pred_texts[i], pred_texts[i+1])
+        edit_similarities.append(edit_similarity)
+    if len(edit_similarities) > 0:
+        prop_zero = edit_similarities.count(0) / len(edit_similarities)
+    else:
+        prop_zero = 0
+    return prop_zero
 
 def levenshteinDistance(s1, s2):
     if len(s1) > len(s2):
@@ -152,6 +220,8 @@ def norm_edit_sim(s1, s2):
         return 1.0 / math.exp( d / (m - d) )
 
 def check_in(s1, s2):
+    if len(s1) >= len(s2):
+        return False
     s2 = s2[:len(s1)]
     return norm_edit_sim(s1, s2) > 0.5
 
@@ -235,7 +305,7 @@ def get_edit_similarities(pred_texts):
         edit_similarities.append(edit_similarity)
     
     edit_similarities = reject_outliers(edit_similarities)
-    # print(edit_similarities)
+    print(edit_similarities)
     avg_edit_sim = sum(edit_similarities)/len(edit_similarities)
     st_dev = statistics.stdev(edit_similarities)
     prop_zero = edit_similarities.count(0) / len(edit_similarities)
@@ -246,12 +316,30 @@ def get_edit_similarities(pred_texts):
 def check_horizontal(bbox, threshold = 10):
     return abs(bbox[0][1] - bbox[1][1]) <= threshold and abs(bbox[2][1] - bbox[3][1]) <= threshold
 
+def reorganise_bbox_for_xml(bbox, text, frame_range):
+    print("CHECKING")
+    print(bbox)
+    print(text)
+    print(frame_range)
+    text = text[0] if type(text)!= str else text
+    x_values = [x[0] for x in bbox]
+    y_values = [x[1] for x in bbox]
+    new_bbox = [min(x_values), min(y_values), max(x_values), max(y_values)]
+    if type(frame_range) == int:
+        frame_range = [frame_range, frame_range]
+    new_bbox_info = [new_bbox, frame_range, text]
+    print(new_bbox_info)
+    return new_bbox_info
+
 def generate_xml(bboxes_all_types, types, base_filename, output_path):
-    # bbox format [[topleftx, toplefty,botrightx, botrighty], [frame_start, ..., frame_end], [text]]
+    # bbox format [[topleftx, toplefty,botrightx, botrighty], [frame_start, ..., frame_end], text]
     xml_string = ['<detection_list>\n']
     for bboxes, bbox_type in zip(bboxes_all_types, types):
+        if len(bboxes)==0:
+            continue
         xml_string.append('\t<detection type={}>\n'.format(bbox_type))
         for bbox in bboxes:
+            print(bbox)
             xml_string.append('\t\t<frame start={} end={}>\n'.format(bbox[1][0], bbox[1][-1]))
             xml_string.append('\t\t\t<bbox>\n\t\t\t\t<topleft>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</topleft>\n'.format(bbox[0][0], bbox[0][1]))
             xml_string.append('\t\t\t\t<botright>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</botright>\n\t\t\t</bbox>\n'.format(bbox[0][2], bbox[0][-1]))
@@ -264,6 +352,39 @@ def generate_xml(bboxes_all_types, types, base_filename, output_path):
     xml_file.write(xml_string)
     xml_file.close()
     print('Saved to {}'.format(xml_filename))
+
+def plot_bbox(img, label_name, bbox, colour=(0, 255, 0)):
+    (w, h), _ = cv2.getTextSize(label_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+    img = cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[-1])), colour, 2)
+    img = cv2.rectangle(img, (int(bbox[0]), int(bbox[1]) - 20), (int(bbox[0]) + w, int(bbox[1])), colour, -1)
+    img = cv2.putText(img, label_name, (int(bbox[0]), int(bbox[1]) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+    return img
+
+def save_to_video(frames, bboxes_all_types, types, video_path, out_dir, base_filename):
+    cap = cv2.VideoCapture(video_path)
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  #width of image
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(1/sample_rate)
+    fps = 1 if fps < 1 else fps
+    out_file = '{}/{}.mp4'.format(out_dir, base_filename)
+    out = cv2.VideoWriter(out_file, fourcc, fps, (width, height))
+    # Plot bboxes and output video
+    frames_dict = {}
+    for idx, frame in enumerate(frames):
+        # img = cv2.imread(frame)
+        frames_dict[idx*sample_rate] = frame
+
+    for type, bboxes in zip(types, bboxes_all_types):
+        for bbox in bboxes:
+            for frame_no in bbox[1]:
+                frames_dict[frame_no] = plot_bbox(frames_dict[frame_no], type+": "+bbox[-1], bbox[0], colours[type])
+
+    for i in range(idx):
+        out.write(frames_dict[i*sample_rate])
+    out.release()
+    cap.release()
 
 
 # def shortened_norm_edit_sim(s1, s2):
