@@ -7,7 +7,7 @@ import statistics
 import numpy as np
 import cv2
 from PIL import Image
-from config import ocr, font_path, sample_rate, colours
+from config import *
 from paddleocr import draw_ocr
 from shapely.geometry import Polygon
 import xml.etree.cElementTree as ET
@@ -105,6 +105,33 @@ def draw_bounding(img_path, ocr_bboxes, output_dir=None, label="_bbox"):
     elif output_dir.endswith(".jpg") or output_dir.endswith(".jpeg"):
         output_path = output_dir
     im_show.save(output_path)
+
+def overlap(coord1, coord2):
+    # union_area = Polygon(self.coords).union(Polygon(new_coords)).area
+    # # if union_area - Polygon(self.coords).area == 0 or union_area - Polygon(new_coords).area < 10:
+    # #     return True
+    # iou = Polygon(self.coords).intersection(Polygon(new_coords)).area / union_area
+    # return iou > iou_threshold
+    mismatch = False
+    x_margin = 100
+    y_margin = 10
+    # coords = [item for sublist in self.coords for item in sublist]
+    # new_coords = [item for sublist in new_coords for item in sublist]
+    coords = [coord1[0][0], coord1[0][1], coord1[2][0], coord1[2][1]]
+    new_coords = [coord2[0][0], coord2[0][1], coord2[2][0], coord2[2][1]]
+    for i, (p, c) in enumerate(zip(coords, new_coords)):
+        if i%2 == 0:
+            margin = x_margin
+        else:
+            margin = y_margin
+        
+        if abs(p-c) <= margin:
+            continue
+        else:
+            mismatch = True
+            break
+
+    return not mismatch
 
 def height(bbox):
     return bbox[2][1]-bbox[0][1]
