@@ -114,7 +114,7 @@ def overlap(coord1, coord2):
     # return iou > iou_threshold
     mismatch = False
     x_margin = 100
-    y_margin = 10
+    y_margin = 20
     # coords = [item for sublist in self.coords for item in sublist]
     # new_coords = [item for sublist in new_coords for item in sublist]
     coords = [coord1[0][0], coord1[0][1], coord1[2][0], coord1[2][1]]
@@ -280,7 +280,7 @@ def check_bbox_below(bbox, height, threshold=0.15):
     else:
         return False
 
-def check_bbox_at_edge(bbox, height, width, threshold=0.15):
+def check_bbox_at_edge(bbox, height, width, threshold=0.15, mode=None):
     if type(bbox) == str:
         bbox = json.loads(bbox)
     quad = [None,None]
@@ -316,7 +316,10 @@ def check_bbox_at_edge(bbox, height, width, threshold=0.15):
         if edge_quad[0] is None or edge_quad[1] is None:
             return False
         find_quad = False
-    return True
+    if mode!=None:
+        return "".join(quad) == mode
+    else:
+        return True
 
 def reject_outliers(data, m=5):
     data = np.array(data)
