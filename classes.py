@@ -195,8 +195,9 @@ class BoundingBox:
         return self.image_quality_score
 
     def is_a_known_channel_name(self):
+        self.video.known_channels = load_known_channels(known_channels_path)
         for bbox_inst in self.bboxes:
-            for known_channel in known_channels:
+            for known_channel in self.video.known_channels:
                 edit_similarity = norm_edit_sim(bbox_inst.text.lower().strip(), known_channel)
                 if edit_similarity > channel_edit_sim:
                     return known_channel
@@ -403,7 +404,7 @@ class BoundingBoxGroup:
     def checknupdate_rc(self):
         if self.check_rc():
             for bbox in self.bboxes:
-                bbox.type = "rolling caption"
+                bbox.type = "rolling news"
                 bbox.overall_coords = self.coords
 
     def assign_colour_cluster(self, bbox_colours):
@@ -459,10 +460,11 @@ class Video:
         self.height = None
         self.width = None
         self.frames = self.generate_frames()
-        self.lang = 'eng'
+        self.lang = 'ch'
         self.bbox_groups = None
         self.channel_name = None
         self.possible_channel = []
+        self.known_channels = None
 
     def generate_frames(self):
         vidcap = cv2.VideoCapture(self.video_path)
@@ -524,6 +526,8 @@ class Video:
         elif len(self.possible_channel) > 0 and self.channel_name is None:
             for bbox in self.possible_channel:
                 bbox.type = "channel"
+                self.known_channels.append(bbox.bboxes[0].text.lower().strip())
+            save_known_channels(self.known_channels, known_channels_path)
 
     def merge_bboxes(self):
         bbox_groups = []

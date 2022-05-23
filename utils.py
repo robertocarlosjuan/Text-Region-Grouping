@@ -36,7 +36,7 @@ def get_bbox_location_dict(results, threshold=0.5, rc_iou=0.5):
                         break
                 if bbox_in_prev_frames is None:
                     for key in bbox_loc.keys():
-                        vert_iou = get_vertical_iou(bbox_info[0], json.loads(key)) # Rolling Captions
+                        vert_iou = get_vertical_iou(bbox_info[0], json.loads(key)) # Rolling News
                         if vert_iou > rc_iou:
                             union_region = get_union_region(bbox_info[0], json.loads(key))
                             bbox_in_prev_frames = ["vert_iou", json.dumps(union_region)]
@@ -415,6 +415,16 @@ def save_to_video(frames, bboxes_all_types, types, video_path, out_dir, base_fil
         out.write(frames_dict[i*sample_rate])
     out.release()
     cap.release()
+
+def load_known_channels(known_channels_path):
+    with open(known_channels_path) as f:
+        known_channels = f.read().splitlines()
+    return known_channels
+
+def save_known_channels(known_channels, known_channels_path):
+    with open(known_channels_path, "w") as f:
+        f.write("\n".join(known_channels))
+
 
 
 # def shortened_norm_edit_sim(s1, s2):

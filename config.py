@@ -27,11 +27,10 @@ colour_density_epsilon = 10
 min_colour_density = 0.4
 min_avg_length_texts_topicrc = 10
 max_quality_scene_text = 50
+known_channels_path = "known_channels.txt"
 
 
 # conda install -c pytorch faiss-gpu
-
-known_channels = ["thestraitstimes", "cna"]
 
 colours = {"channels": (0, 255, 0), #green
             "titles": (255, 0, 0), # red
