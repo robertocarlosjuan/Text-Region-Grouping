@@ -1,15 +1,23 @@
 import os
 import cv2
-import json
 import subprocess
 import numpy as np
+import pandas as pd
+from glob import glob
+from tqdm import tqdm
 import speech_recognition as sr
+from pydub import AudioSegment
+from pydub.silence import detect_silence
 
 from config import *
 from utils import *
 from sklearn.cluster import KMeans
 from shapely.geometry import Polygon
 from Levenshtein import distance as lev
+from PIL import Image
+import sys
+# sys.path.append("/home/hcari/trg/image_quality/")
+# import imquality.brisque as brisque
 
 class BoundingBoxInstance:
     def __init__(self, coords, frame, text, conf, type=None):
@@ -21,6 +29,7 @@ class BoundingBoxInstance:
         self.bbox = None
         self.cropped_image = None
         self.colour = None
+        self.image_quality_score = None
 
     def is_horizontal(self):
         return abs(self.coords[0][1] - self.coords[1][1]) <= hor_leeway and abs(self.coords[2][1] - self.coords[3][1]) <= hor_leeway
@@ -30,7 +39,18 @@ class BoundingBoxInstance:
 
     def get_cropped_image(self, frame, coords):
         plot_coords = get_plot_coords(coords)
-        self.cropped_image = frame.image[int(plot_coords[1]):int(plot_coords[3]), int(plot_coords[0]):int(plot_coords[2])]
+        self.cropped_image = frame.image[int(plot_coords[1]):int(plot_coords[3]), int(plot_coords[0]):int(plot_coords[2]), :]
+        return self.cropped_image
+
+    def get_image_quality_score(self, coords):
+        cropped_image = self.get_cropped_image(self.frame, coords)
+        cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(cropped_image)
+        try:
+            self.image_quality_score = brisque.score(pil_image)
+            return self.image_quality_score
+        except:
+            return None
 
     def get_common_colours(self): # K-Means, K=2, check sse
         if self.cropped_image is None:
@@ -61,6 +81,7 @@ class BoundingBox:
         self.texts = None
         self.text_length = None
         self.consider_merging = None
+        self.image_quality_score = None
 
     def get_frame_nos(self):
         return [bbox_inst.frame.frame_no for bbox_inst in self.bboxes]
@@ -125,13 +146,16 @@ class BoundingBox:
         else:
             return False
 
-    def check_static_type(self):
+    def check_static_type(self, not_channel=False):
+        # print()
         # print(self.bboxes[0].text, self.overall_coords)
+        known_channel = self.is_a_known_channel_name()
         if not self.is_horizontal():
             # print("Not horizontal:  scene text")
             self.type = "scene text"
             self.consider_merging = False
-        elif self.is_a_known_channel_name() and self.check_bbox_at_corner():
+        elif known_channel and self.check_bbox_at_corner():
+            self.video.channel_name = known_channel
             # print("known channel: channel")
             self.type = "channel"
             self.consider_merging = False
@@ -143,15 +167,16 @@ class BoundingBox:
                 # print("static text")
                 # print("bbox at corner: ", self.check_bbox_at_corner())
                 # print("last through vid: ", self.check_bbox_last_through_vid())
-                if self.check_bbox_at_corner() and self.check_bbox_last_through_vid():
+                # print(self.check_bbox_at_corner(), self.check_bbox_last_through_vid())
+                if known_channel is None and not not_channel and self.check_bbox_at_corner() and self.check_bbox_last_through_vid():
                     # print("channel")
-                    self.type = "channel"
-                elif self.check_bbox_lower():
-                    # print("bbox lower: topic sentence")
-                    self.type = "topic sentence"
-                else:
+                    self.video.possible_channel.append(self)
+                elif not self.check_bbox_lower(): # and self.get_image_quality_score() is not None and self.image_quality_score < max_quality_scene_text:
                     # print("scene text")
                     self.type = "scene text"
+                elif self.check_bbox_lower() and self.long_texts():
+                    # print("bbox lower: topic sentence")
+                    self.type = "topic sentence"
             elif not self.long_texts():
                 self.type = "scene text"
         # elif ASR HERE
@@ -165,12 +190,22 @@ class BoundingBox:
         else:
             return False
 
+    def get_image_quality_score(self):
+        for bbox in self.bboxes:
+            img_quality = bbox.get_image_quality_score(self.overall_coords)
+            if img_quality is not None:
+                self.image_quality_score = img_quality
+                break
+        return self.image_quality_score
+
     def is_a_known_channel_name(self):
+        self.video.known_channels = load_known_channels(known_channels_path)
         for bbox_inst in self.bboxes:
-            for known_channel in known_channels:
+            for known_channel in self.video.known_channels:
                 edit_similarity = norm_edit_sim(bbox_inst.text.lower().strip(), known_channel)
                 if edit_similarity > channel_edit_sim:
-                    return True
+                    return known_channel
+        return None
         
     def check_bbox_last_through_vid(self):
         no_frame_in_bbox = len(set([bbox_inst.frame.frame_no for bbox_inst in self.bboxes]))
@@ -323,12 +358,20 @@ class BoundingBoxGroup:
             return True
         return False
 
+    def merge_bboxg(self, new_bboxg):
+        if get_vertical_iou(self.coords, new_bboxg.coords) > vertical_iou_thres:
+            self.bboxes.extend(new_bboxg.bboxes)
+            self.texts.extend(new_bboxg.texts)
+            self.coords = get_horizontal_union_region(self.coords, new_bboxg.coords)
+            return True
+        else:
+            return False
+
     def check_rc(self):
         checks = []
         # print("In RC: ", self.texts[0], self.coords)
         checks.append(self.changing_texts())
-        checks.append(self.check_rc_by_text())
-        checks.append(self.check_rc_by_length())
+        checks.append(self.check_rc_by_text() or self.check_rc_by_length())
         # print("rc checks: ", checks)
         return all(checks)
 
@@ -345,16 +388,17 @@ class BoundingBoxGroup:
             if not item_in_clusters:
                 for i in range(len(rc_sorted)-1,0,-1):
                     key = rc_sorted[i]
-                    if check_in(item.texts[0], key.texts[0]):
+                    if check_in(item.texts[0], key.texts[0]) and key not in clusters.keys():
                         clusters[key] = 1
                         item_in_clusters = True
                         break
-        refined_clusters = [(k,v) for k, v in clusters.items() if v>1 and v!=max(clusters.values())]
+        # print(clusters)
+        refined_clusters = [(k,v) for k, v in clusters.items()] # if v>1 and v!=max(clusters.values())
         return len(refined_clusters)>0
 
     def check_rc_by_length(self):
-        # print("length of rc: ", len("".join(self.texts))/len(self.video.frames))
-        return len("".join(self.texts))/len(self.video.frames) > min_length_texts_for_rc
+        # print("length of rc: ", len("".join(set(self.texts)))/len(self.video.frames))
+        return len("".join(set(self.texts)))/len(self.video.frames) > min_length_texts_for_rc
 
     def changing_texts(self):
         self.prop_zero = diff_density(self.texts)
@@ -364,7 +408,7 @@ class BoundingBoxGroup:
     def checknupdate_rc(self):
         if self.check_rc():
             for bbox in self.bboxes:
-                bbox.type = "rolling caption"
+                bbox.type = "rolling news"
                 bbox.overall_coords = self.coords
 
     def assign_colour_cluster(self, bbox_colours):
@@ -412,7 +456,7 @@ class BoundingBoxGroup:
             return False
 
 class Video:
-    def __init__(self, video_path, audio_save_path):
+    def __init__(self, video_path, audio_save_path, shot_path):
         self.video_path = video_path
         self.audio_save_path = audio_save_path
         self.base_filename = os.path.splitext(os.path.basename(self.video_path))[0]
@@ -420,7 +464,13 @@ class Video:
         self.height = None
         self.width = None
         self.frames = self.generate_frames()
-        self.lang = 'eng'
+        self.lang = 'ch'
+        self.bbox_groups = None
+        self.channel_name = None
+        self.possible_channel = []
+        self.known_channels = None
+        self.shot_path = shot_path
+        self.org_fps = None
 
     def generate_frames(self):
         vidcap = cv2.VideoCapture(self.video_path)
@@ -464,13 +514,26 @@ class Video:
                 if merged:
                     if i not in final_bboxes_idx:
                         final_bboxes_idx.append(i)
-                    to_skip.append(j)
+                    if j not in to_skip:
+                        to_skip.append(j)
+        if len(bboxes) > 0:
+            last_idx = len(bboxes)-1
+            if last_idx not in to_skip:
+                final_bboxes_idx.append(last_idx)
         self.bboxes = [bboxes[x] for x in final_bboxes_idx]
         return self.bboxes
 
     def first_stage_classify_bboxes(self):
         for bbox in self.bboxes:
             bbox.check_static_type()
+        if len(self.possible_channel) > 0 and self.channel_name is not None:
+            for bbox in self.possible_channel:
+                bbox.check_static_type(not_channel=True)
+        elif len(self.possible_channel) > 0 and self.channel_name is None:
+            for bbox in self.possible_channel:
+                bbox.type = "channel"
+                self.known_channels.append(bbox.bboxes[0].text.lower().strip())
+            save_known_channels(self.known_channels, known_channels_path)
 
     def merge_bboxes(self):
         bbox_groups = []
@@ -482,7 +545,26 @@ class Video:
                     added = bboxg.checknadd_bbox(bbox)
                 if not added:
                     bbox_groups.append(BoundingBoxGroup(bbox, self))
-        for bboxg in bbox_groups:
+        to_skip = []
+        final_bboxes_idx = []
+        for i in range(len(bbox_groups)-1):
+            if i in to_skip:
+                continue
+            for j in range(i+1, len(bbox_groups)):
+                if j in to_skip:
+                    continue
+                merged = bbox_groups[i].merge_bboxg(bbox_groups[j])
+                if merged:
+                    if i not in final_bboxes_idx:
+                        final_bboxes_idx.append(i)
+                    if j not in to_skip:
+                        to_skip.append(j)
+        if len(bbox_groups) > 0:
+            last_idx = len(bbox_groups)-1
+            if last_idx not in to_skip:
+                final_bboxes_idx.append(last_idx)
+        self.bbox_groups = [bbox_groups[x] for x in final_bboxes_idx]
+        for bboxg in self.bbox_groups:
             bboxg.checknupdate_rc()
 
     def save_to_video(self, out_dir):
@@ -496,16 +578,16 @@ class Video:
         for frame in self.frames:
             frame.generate_bbox_list()
             for bbox in frame.bboxes:
-                frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(id(bbox))+str(bbox.type)+str(bbox.density), get_plot_coords(bbox.overall_coords), (0,0,0))
+                frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(bbox.type), get_plot_coords(bbox.overall_coords), (0,0,0))
             out.write(frame.image_w_bbox)
         out.release()
         cap.release()
 
     def check_subtitles(self):
         r = sr.Recognizer()
-        base_filename = self.video_path.split('/')[-1].split('.')[0]
+        # base_filename = self.video_path.split('/')[-1].split('.')[0]
         # Convert mp4 file to wav file
-        audio_file = '{}/{}.wav'.format(self.audio_save_path, base_filename)
+        audio_file = '{}/{}.wav'.format(self.audio_save_path, self.base_filename)
         assert self.video_path.endswith(".mp4")
         if not os.path.exists(audio_file):
             ffmpeg_command = 'ffmpeg -i "{}" -ac 1 -ar 16000 "{}"'.format(self.video_path, audio_file)
@@ -524,7 +606,6 @@ class Video:
                 # pred_text = r.recognize_google_cloud(temp_audio, credentials_json=GOOGLE_CLOUD_SPEECH_CREDENTIALS)
             except sr.UnknownValueError:
                 pred_text = ''
-            lev_threshold = 10
             joiner = ' '
         elif self.lang == 'ch':
             try:
@@ -532,46 +613,123 @@ class Video:
                 # pred_text = r.recognize_google_cloud(temp_audio, language='zh', credentials_json=GOOGLE_CLOUD_SPEECH_CREDENTIALS)
             except sr.UnknownValueError:
                 pred_text = ''
-            lev_threshold = 5
             joiner = ''
 
-        print('ASR', pred_text, '\n')
-        subtitle_bboxes = []
-        for i, bbox in enumerate(self.bboxes):
+        # print('ASR', pred_text, '\n')
+        lev_threshold = 500
+        min_lev = 99999
+        for bbox in self.bboxes:
             text = [sub_bbox.text for sub_bbox in bbox.bboxes]
             distinct_text = []
-            [distinct_text.append(x) for x in text if x not in distinct_text]
+            for x in text:
+                repeat = False
+                for y in distinct_text:
+                    if lev(x,y) < 5:
+                        repeat = True
+                        break
+                if not repeat:
+                    distinct_text.append(x)
             distinct_text = joiner.join(distinct_text)
-            # if len(distinct_text) > 20:
-            #     print('OCR {}:'.format(i), distinct_text, '\n')
-            # text_dict[i] = joiner.join(distinct_text)
-            if lev(pred_text, distinct_text) < lev_threshold:
-                subtitle_bboxes.append([i, [sub_bbox.coords for sub_bbox in bbox.bboxes]])
+            lev_dist = lev(pred_text, distinct_text)
+            # print(distinct_text, lev_dist, '\n')
+            if lev_dist < min_lev and lev_dist < lev_threshold:
+                min_lev = lev_dist
+                subtitle_info = [[sub_bbox.coords for sub_bbox in bbox.bboxes], distinct_text]
+                bbox.type = 'subtitle'
         
-        return subtitle_bboxes
+        return subtitle_info
+    
+    def check_bounding_boxes_group(self):
+        for i, bboxg in enumerate(self.bbox_groups):
+            print(i, bboxg.texts[0])
+            print(bboxg.coords)
 
-    def check_bounding_boxes(self):
-        for i, bbox in enumerate(self.bboxes):
-            print(i, bbox.bboxes[0].text)
-            print(bbox.overall_coords)
-            frame_nos = [x.frame.frame_no for x in bbox.bboxes]
-            print(min(frame_nos), max(frame_nos))
+    def compare_shots(self):
+        shot_info = pd.read_csv('{}/{}.txt'.format(self.shot_path, self.base_filename), sep=' ', header=None)
+        shots = glob('{}/{}_*.jpg'.format(shot_path, self.base_filename))
+        shots.sort(key=natural_keys)
+        shot_bbox_hist, _ = track_bboxes(shots,'shot')
+        scene_text_bboxes = find_scene_text(shot_bbox_hist, shot_info)
 
-def run(video_paths, audio_save_path): 
+        cap = cv2.VideoCapture(self.video_path)
+        self.org_fps = round(cap.get(cv2.CAP_PROP_FPS))
+        cap.release()
+        for frame in self.frames:
+            translated_frame_no = translate_frame(self.org_fps, frame.frame_no)
+            for st_bbox in scene_text_bboxes:
+                if translated_frame_no in list(range(st_bbox[1][0], st_bbox[1][1])):
+                    # print(frame.frame_no, st_bbox)
+                    for bbox in frame.bbox_instances:
+                        bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
+                        if overlap(st_bbox[0], bbox_coords, 'shot') and bbox.bbox.type == None:
+                            # _scene_text_bboxes.append([frame.frame_no, translated_frame_no, bbox_coords])
+                            bbox.bbox.type = 'scene text'
+
+    def check_no_audio_subtitle(self):
+        audio_file = '{}/{}.wav'.format(self.audio_save_path, self.base_filename)
+        sound = AudioSegment.from_file(audio_file, format="wav")
+        silent_chunks = detect_silence(sound, min_silence_len=1000, silence_thresh=-40)
+        # Convert to translated frame num 
+        silent_frames = [[int(start/sample_rate), int(stop/sample_rate)+1] for start, stop in silent_chunks]
+        filtered_silent_frames = []
+        for i, frames in enumerate(silent_frames):
+            if i == 0:
+                filtered_silent_frames.append(frames)
+                prev_frames = frames
+                continue
+            if prev_frames[1] > frames[0]:
+                filtered_silent_frames[len(filtered_silent_frames)-1][1] = frames[1]
+            else:
+                filtered_silent_frames.append(frames)
+            prev_frames = frames
+        # print(filtered_silent_frames)
+        subtitle_bboxes = []
+        for silence in silent_frames:
+            frame_bboxes = []
+            for idx in range(silence[0], silence[-1]):
+                frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
+            bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300)
+            
+            for bbox in bbox_hist:
+                frame_range = bbox[1]
+                num_frames = frame_range[-1] - frame_range[0]
+                # Detect subtitle bbox
+                find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+        print('NO AUDIO SUB', subtitle_bboxes)
+        for frame in self.frames:
+            for sub_bbox in subtitle_bboxes:
+                if frame.frame_no in list(range(sub_bbox[1][0], sub_bbox[1][1])):
+                    print('YES 1')
+                    for bbox in frame.bbox_instances:
+                        bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
+                        if overlap(sub_bbox[0], bbox_coords, 'no_audio', x_margin=100, y_margin=100):
+                            print(sub_bbox[-1])
+                            bbox.bbox.type = 'subtitle'
+
+def run(video_path, audio_save_path, shot_path, out_dir): 
+    if os.path.isfile(video_path):
+        video_paths = [video_path]
+    else:
+        video_paths = [os.path.join(video_path, x) for x in os.listdir(video_path)]
+
     for video_path in video_paths:
-        out_dir = "/home/hcari/trg/visualize"
-        video = Video(video_path, audio_save_path)
+        # out_dir = "/home/hcari/trg/visualize"
+        video = Video(video_path, audio_save_path, shot_path)
         video.generate_bboxes()
         video.first_stage_classify_bboxes()
         video.merge_bboxes()
-        subtitle_bboxes = video.check_subtitles()
-        # print(subtitle_bboxes)
-        video.check_bounding_boxes()
+        video.check_subtitles()
+        video.compare_shots()
+        video.check_no_audio_subtitle()
+        # video.check_bounding_boxes_group()
         video.save_to_video(out_dir)
 
-video_dir = "/home/hcari/trg/videos/"
-# audio_save_path = '../non_commit_trg/audio'
-video_paths = [os.path.join(video_dir, x) for x in os.listdir(video_dir)]
+# video_path = "/home/hcari/trg/videos/"
+# audio_save_path = "/home/hcari/trg/visualize/wav_files"
+video_path = '../montage_detection/sinovac_ver/ref_video/Fl-VIyIIYCk.mp4'
+audio_save_path = '../non_commit_trg/audio'
+shot_path = '../montage_detection/images/sinovac/db'
+out_dir = '../non_commit_trg/output'
+
 # video_paths = ["/home/hcari/trg/videos/First day of Sinovac vaccine roll-out – one clinic shares experience _ THE BIG STORY [MucpzHvMKkw].mp4"]
-audio_save_path = "/home/hcari/trg/visualize/wav_files"
-run(video_paths, audio_save_path)
+run(video_path, audio_save_path, shot_path, out_dir)
