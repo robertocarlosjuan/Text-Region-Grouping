@@ -433,7 +433,7 @@ def atoi(text):
 def natural_keys(text):
     return [ atoi(c) for c in re.split(r'(\d+)', text) ]
 
-def track_bboxes(frames, type='', x_margin=100, y_margin=10):
+def track_bboxes(frames, type='', x_margin=100, y_margin=10, lead=0):
     bbox_dict = {}
     bbox_hist = []
     feature_frame_idx = []
@@ -462,6 +462,8 @@ def track_bboxes(frames, type='', x_margin=100, y_margin=10):
             if not continued:
                 coors_to_delete.append(tracked_coor)
                 if frame_range[-1] - frame_range[0] >= 0:
+                    frame_range[0] += lead
+                    frame_range[-1] += lead
                     bbox_hist.append([tracked_coor, frame_range, tracked_text])
         
         for curr_bbox in ocr_bboxes:
@@ -483,7 +485,7 @@ def track_bboxes(frames, type='', x_margin=100, y_margin=10):
 def find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, height):
     # Condition for detecting subtitle bbox
     in_ms = num_frames * sample_rate
-    if in_ms >= 0 and in_ms <= 4000 and bbox[0][-1] >= int(height/2):
+    if in_ms >= 0 and in_ms <= 4000 and bbox[0][1] >= int(height/2):
         subtitle_bboxes.append(bbox)
 
 def find_scene_text(shot_bbox_hist, shot_info):

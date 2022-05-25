@@ -666,37 +666,62 @@ class Video:
                             bbox.bbox.type = 'scene text'
 
     def check_no_audio_subtitle(self):
-        audio_file = '{}/{}.wav'.format(self.audio_save_path, self.base_filename)
-        sound = AudioSegment.from_file(audio_file, format="wav")
-        silent_chunks = detect_silence(sound, min_silence_len=1000, silence_thresh=-40)
-        # Convert to translated frame num 
-        silent_frames = [[int(start/sample_rate), int(stop/sample_rate)+1] for start, stop in silent_chunks]
-        filtered_silent_frames = []
-        for i, frames in enumerate(silent_frames):
-            if i == 0:
-                filtered_silent_frames.append(frames)
-                prev_frames = frames
-                continue
-            if prev_frames[1] > frames[0]:
-                filtered_silent_frames[len(filtered_silent_frames)-1][1] = frames[1]
-            else:
-                filtered_silent_frames.append(frames)
-            prev_frames = frames
-        # print(filtered_silent_frames)
-        subtitle_bboxes = []
-        for silence in filtered_silent_frames:
-            frame_bboxes = []
-            for idx in range(silence[0], silence[-1]):
-                frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
-            bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300)
-            
-            # print('BBOX HIST', bbox_hist)
-            for bbox in bbox_hist:
-                frame_range = bbox[1]
-                num_frames = frame_range[-1] - frame_range[0]
-                # Detect subtitle bbox
-                find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+        # audio_file = '{}/{}.wav'.format(self.audio_save_path, self.base_filename)
+        # sound = AudioSegment.from_file(audio_file, format="wav")
+        # silent_chunks = detect_silence(sound, min_silence_len=1000, silence_thresh=-40)
+        # # Convert to translated frame num 
+        # silent_frames = [[int(start/sample_rate), int(stop/sample_rate)+1] for start, stop in silent_chunks]
+        # filtered_silent_frames = []
+        # for i, frames in enumerate(silent_frames):
+        #     if i == 0:
+        #         filtered_silent_frames.append(frames)
+        #         prev_frames = frames
+        #         continue
+        #     if prev_frames[1] > frames[0]:
+        #         filtered_silent_frames[len(filtered_silent_frames)-1][1] = frames[1]
+        #     else:
+        #         filtered_silent_frames.append(frames)
+        #     prev_frames = frames
         
+        # subtitle_bboxes = []
+        # for silence in filtered_silent_frames:
+        #     frame_bboxes = []
+        #     for idx in range(silence[0], silence[-1]):
+        #         frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
+        #     bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300, lead=silence[0])
+            
+        #     # print('BBOX HIST', bbox_hist)
+        #     for bbox in bbox_hist:
+        #         frame_range = bbox[1]
+        #         num_frames = frame_range[-1] - frame_range[0]
+        #         # Detect subtitle bbox
+        #         find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+
+        subtitle_bboxes = []
+        frame_bboxes = []
+        for frame in self.frames:
+            frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in frame.bbox_instances])
+        bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300)
+        
+        # print('BBOX HIST', bbox_hist)
+        for bbox in bbox_hist:
+            frame_range = bbox[1]
+            num_frames = frame_range[-1] - frame_range[0]
+            # Detect subtitle bbox
+            find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+
+        print('NO AUDIO SUB', subtitle_bboxes)
+
+        for frame in self.frames:
+            for sub_bbox in subtitle_bboxes:
+                if frame.frame_no in list(range(sub_bbox[1][0], sub_bbox[1][1])):
+                    for bbox in frame.bbox_instances:
+                        bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
+                        # print(sub_bbox[-1], sub_bbox[0], bbox_coords)
+                        if overlap(sub_bbox[0], bbox_coords, 'no_audio'):#, x_margin=100, y_margin=100):
+                            # print('YES')
+                            bbox.bbox.type = 'subtitle'
+
         # print('BEFORE', silent_frames)
         # print('AFTER', filtered_silent_frames)
         # for silence in filtered_silent_frames:
@@ -709,18 +734,12 @@ class Video:
         #             print(frames, bbox.texts)
         #             if sum(bboxes_height)/len(bboxes_height) <= int(self.height/2):
         #                 bbox.type = 'subtitle'
-
-        # print('NO AUDIO SUB', subtitle_bboxes)
-
+    
+    def none_to_st(self):
         for frame in self.frames:
-            for sub_bbox in subtitle_bboxes:
-                if frame.frame_no in list(range(sub_bbox[1][0], sub_bbox[1][1])):
-                    for bbox in frame.bbox_instances:
-                        bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
-                        # print(sub_bbox[-1], sub_bbox[0], bbox_coords)
-                        if overlap(sub_bbox[0], bbox_coords, 'no_audio', x_margin=400, y_margin=400):
-                            # print('YES')
-                            bbox.bbox.type = 'subtitle'
+            for bbox in frame.bbox_instances:
+                if bbox.bbox.type == None:
+                    bbox.bbox.type = 'scene text'
 
 def run(video_path, audio_save_path, shot_path, out_dir): 
     if os.path.isfile(video_path):
@@ -737,6 +756,7 @@ def run(video_path, audio_save_path, shot_path, out_dir):
         video.check_subtitles()
         video.compare_shots()
         video.check_no_audio_subtitle()
+        video.none_to_st()
         # video.check_bounding_boxes_group()
         video.save_to_video(out_dir)
 
