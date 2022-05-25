@@ -684,26 +684,42 @@ class Video:
             prev_frames = frames
         # print(filtered_silent_frames)
         subtitle_bboxes = []
-        for silence in silent_frames:
+        for silence in filtered_silent_frames:
             frame_bboxes = []
             for idx in range(silence[0], silence[-1]):
                 frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
             bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300)
             
+            # print('BBOX HIST', bbox_hist)
             for bbox in bbox_hist:
                 frame_range = bbox[1]
                 num_frames = frame_range[-1] - frame_range[0]
                 # Detect subtitle bbox
                 find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
-        print('NO AUDIO SUB', subtitle_bboxes)
+        
+        # print('BEFORE', silent_frames)
+        # print('AFTER', filtered_silent_frames)
+        # for silence in filtered_silent_frames:
+        #     for bbox in self.bboxes:
+        #         bboxes_height = [sub_bbox.coords[2][-1] for sub_bbox in bbox.bboxes]
+        #         frames = [sub_bbox.frame.frame_no for sub_bbox in bbox.bboxes]
+        #         num_frames = max(frames) - min(frames)
+        #         in_ms = num_frames * sample_rate
+        #         if silence[0] >= min(frames) and silence[-1] <= max(frames):
+        #             print(frames, bbox.texts)
+        #             if sum(bboxes_height)/len(bboxes_height) <= int(self.height/2):
+        #                 bbox.type = 'subtitle'
+
+        # print('NO AUDIO SUB', subtitle_bboxes)
+
         for frame in self.frames:
             for sub_bbox in subtitle_bboxes:
                 if frame.frame_no in list(range(sub_bbox[1][0], sub_bbox[1][1])):
-                    print('YES 1')
                     for bbox in frame.bbox_instances:
                         bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
-                        if overlap(sub_bbox[0], bbox_coords, 'no_audio', x_margin=100, y_margin=100):
-                            print(sub_bbox[-1])
+                        # print(sub_bbox[-1], sub_bbox[0], bbox_coords)
+                        if overlap(sub_bbox[0], bbox_coords, 'no_audio', x_margin=400, y_margin=400):
+                            # print('YES')
                             bbox.bbox.type = 'subtitle'
 
 def run(video_path, audio_save_path, shot_path, out_dir): 

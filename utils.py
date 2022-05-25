@@ -482,7 +482,8 @@ def track_bboxes(frames, type='', x_margin=100, y_margin=10):
 
 def find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, height):
     # Condition for detecting subtitle bbox
-    if num_frames * sample_rate >= 1000 and num_frames * sample_rate <= 3000 and bbox[0][-1] >= int(height/2):
+    in_ms = num_frames * sample_rate
+    if in_ms >= 0 and in_ms <= 4000 and bbox[0][-1] >= int(height/2):
         subtitle_bboxes.append(bbox)
 
 def find_scene_text(shot_bbox_hist, shot_info):
