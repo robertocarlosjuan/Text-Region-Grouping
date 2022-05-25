@@ -19,6 +19,8 @@ import sys
 # sys.path.append("/home/hcari/trg/image_quality/")
 # import imquality.brisque as brisque
 
+from shot_detection.shot_detector import shot_key_frame_detect
+
 class BoundingBoxInstance:
     def __init__(self, coords, frame, text, conf, type=None):
         self.coords = coords # [[442.0, 173.0], [1169.0, 173.0], [1169.0, 225.0], [442.0, 225.0]]
@@ -645,6 +647,7 @@ class Video:
             print(bboxg.coords)
 
     def compare_shots(self):
+        shot_key_frame_detect(self.video_path, self.shot_path)
         shot_info = pd.read_csv('{}/{}.txt'.format(self.shot_path, self.base_filename), sep=' ', header=None)
         shots = glob('{}/{}_*.jpg'.format(shot_path, self.base_filename))
         shots.sort(key=natural_keys)
@@ -701,7 +704,7 @@ class Video:
         frame_bboxes = []
         for frame in self.frames:
             frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in frame.bbox_instances])
-        bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300)
+        bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio')#, x_margin=200, y_margin=300)
         
         # print('BBOX HIST', bbox_hist)
         for bbox in bbox_hist:
@@ -710,7 +713,7 @@ class Video:
             # Detect subtitle bbox
             find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
 
-        print('NO AUDIO SUB', subtitle_bboxes)
+        # print('NO AUDIO SUB', subtitle_bboxes)
 
         for frame in self.frames:
             for sub_bbox in subtitle_bboxes:
@@ -762,9 +765,9 @@ def run(video_path, audio_save_path, shot_path, out_dir):
 
 # video_path = "/home/hcari/trg/videos/"
 # audio_save_path = "/home/hcari/trg/visualize/wav_files"
-video_path = '../montage_detection/sinovac_ver/ref_video/Fl-VIyIIYCk.mp4'
+video_path = '../montage_detection/sinovac_ver/query_video/ChineseSinovacVideo.mp4'
 audio_save_path = '../non_commit_trg/audio'
-shot_path = '../montage_detection/images/sinovac/db'
+shot_path = '../montage_detection/images/sinovac/query'
 out_dir = '../non_commit_trg/output'
 
 # video_paths = ["/home/hcari/trg/videos/First day of Sinovac vaccine roll-out – one clinic shares experience _ THE BIG STORY [MucpzHvMKkw].mp4"]
