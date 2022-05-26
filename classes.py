@@ -170,7 +170,7 @@ class BoundingBox:
                 elif not self.check_bbox_lower(): # and self.get_image_quality_score() is not None and self.image_quality_score < max_quality_scene_text:
                     # print("scene text")
                     self.type = "scene text"
-                elif self.check_bbox_lower() and self.long_texts():
+                elif self.long_texts(): #self.check_bbox_lower() and 
                     # print("bbox lower: topic sentence")
                     self.type = "topic sentence"
             elif not self.long_texts():
@@ -571,8 +571,10 @@ class Video:
         out = cv2.VideoWriter(out_file, fourcc, fps, (width, height))
         for frame in self.frames:
             frame.generate_bbox_list()
-            for bbox in frame.bboxes:
-                frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(bbox.type), get_plot_coords(bbox.overall_coords), (0,0,0))
+            # for bbox in frame.bboxes:
+            #     frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(bbox.type), get_plot_coords(bbox.overall_coords), (0,0,0))
+            for bbox_inst in frame.bbox_instances:
+                frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(bbox_inst.bbox.type), get_plot_coords(bbox_inst.coords), (0,0,0))
             out.write(frame.image_w_bbox)
         out.release()
         cap.release()
@@ -621,11 +623,12 @@ class Video:
             distinct_text = []
             [distinct_text.append(x) for x in text if x not in distinct_text]
             distinct_text = joiner.join(distinct_text)
+            print("OCR", distinct_text)
             # if len(distinct_text) > 20:
             #     print('OCR {}:'.format(i), distinct_text, '\n')
             # text_dict[i] = joiner.join(distinct_text)
+            print(pred_text, "|", distinct_text, "|", lev(pred_text, distinct_text), lev_threshold, lev(pred_text, distinct_text) < lev_threshold)
             if lev(pred_text, distinct_text) < lev_threshold:
-                print(pred_text, "|", distinct_text, "|", lev(pred_text, distinct_text), lev_threshold, lev(pred_text, distinct_text) < lev_threshold)
                 subtitle_bboxes.append([i, [sub_bbox.coords for sub_bbox in bbox.bboxes]])
                 bbox.type = "subtitle"
         
@@ -654,3 +657,5 @@ video_paths = [os.path.join(video_dir, x) for x in os.listdir(video_dir)]
 # video_paths = ["/home/hcari/trg/videos/First day of Sinovac vaccine roll-out – one clinic shares experience _ THE BIG STORY [MucpzHvMKkw].mp4"]
 audio_save_path = "/home/hcari/trg/visualize/wav_files"
 run(video_paths, audio_save_path)
+
+
