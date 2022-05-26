@@ -466,7 +466,7 @@ class Video:
         self.height = None
         self.width = None
         self.frames = self.generate_frames()
-        self.lang = 'ch'
+        self.lang = 'eng'
         self.bbox_groups = None
         self.channel_name = None
         self.possible_channel = []
@@ -639,7 +639,7 @@ class Video:
                 subtitle_info = [[sub_bbox.coords for sub_bbox in bbox.bboxes], distinct_text]
                 bbox.type = 'subtitle'
         
-        return subtitle_info
+        # return subtitle_info
     
     def check_bounding_boxes_group(self):
         for i, bboxg in enumerate(self.bbox_groups):
@@ -669,49 +669,49 @@ class Video:
                             bbox.bbox.type = 'scene text'
 
     def check_no_audio_subtitle(self):
-        # audio_file = '{}/{}.wav'.format(self.audio_save_path, self.base_filename)
-        # sound = AudioSegment.from_file(audio_file, format="wav")
-        # silent_chunks = detect_silence(sound, min_silence_len=1000, silence_thresh=-40)
-        # # Convert to translated frame num 
-        # silent_frames = [[int(start/sample_rate), int(stop/sample_rate)+1] for start, stop in silent_chunks]
-        # filtered_silent_frames = []
-        # for i, frames in enumerate(silent_frames):
-        #     if i == 0:
-        #         filtered_silent_frames.append(frames)
-        #         prev_frames = frames
-        #         continue
-        #     if prev_frames[1] > frames[0]:
-        #         filtered_silent_frames[len(filtered_silent_frames)-1][1] = frames[1]
-        #     else:
-        #         filtered_silent_frames.append(frames)
-        #     prev_frames = frames
+        audio_file = '{}/{}.wav'.format(self.audio_save_path, self.base_filename)
+        sound = AudioSegment.from_file(audio_file, format="wav")
+        silent_chunks = detect_silence(sound, min_silence_len=1000, silence_thresh=-40)
+        # Convert to translated frame num 
+        silent_frames = [[int(start/sample_rate), int(stop/sample_rate)+1] for start, stop in silent_chunks]
+        filtered_silent_frames = []
+        for i, frames in enumerate(silent_frames):
+            if i == 0:
+                filtered_silent_frames.append(frames)
+                prev_frames = frames
+                continue
+            if prev_frames[1] > frames[0]:
+                filtered_silent_frames[len(filtered_silent_frames)-1][1] = frames[1]
+            else:
+                filtered_silent_frames.append(frames)
+            prev_frames = frames
         
-        # subtitle_bboxes = []
-        # for silence in filtered_silent_frames:
-        #     frame_bboxes = []
-        #     for idx in range(silence[0], silence[-1]):
-        #         frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
-        #     bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', x_margin=200, y_margin=300, lead=silence[0])
-            
-        #     # print('BBOX HIST', bbox_hist)
-        #     for bbox in bbox_hist:
-        #         frame_range = bbox[1]
-        #         num_frames = frame_range[-1] - frame_range[0]
-        #         # Detect subtitle bbox
-        #         find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
-
         subtitle_bboxes = []
-        frame_bboxes = []
-        for frame in self.frames:
-            frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in frame.bbox_instances])
-        bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio')#, x_margin=200, y_margin=300)
+        for silence in filtered_silent_frames:
+            frame_bboxes = []
+            for idx in range(silence[0], silence[-1]):
+                frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
+            bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', lead=silence[0])
+            
+            # print('BBOX HIST', bbox_hist)
+            for bbox in bbox_hist:
+                frame_range = bbox[1]
+                num_frames = frame_range[-1] - frame_range[0]
+                # Detect subtitle bbox
+                find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+
+        # subtitle_bboxes = []
+        # frame_bboxes = []
+        # for frame in self.frames:
+        #     frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in frame.bbox_instances])
+        # bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio')#, x_margin=200, y_margin=300)
         
-        # print('BBOX HIST', bbox_hist)
-        for bbox in bbox_hist:
-            frame_range = bbox[1]
-            num_frames = frame_range[-1] - frame_range[0]
-            # Detect subtitle bbox
-            find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+        # # print('BBOX HIST', bbox_hist)
+        # for bbox in bbox_hist:
+        #     frame_range = bbox[1]
+        #     num_frames = frame_range[-1] - frame_range[0]
+        #     # Detect subtitle bbox
+        #     find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
 
         # print('NO AUDIO SUB', subtitle_bboxes)
 
@@ -721,7 +721,7 @@ class Video:
                     for bbox in frame.bbox_instances:
                         bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
                         # print(sub_bbox[-1], sub_bbox[0], bbox_coords)
-                        if overlap(sub_bbox[0], bbox_coords, 'no_audio'):#, x_margin=100, y_margin=100):
+                        if overlap(sub_bbox[0], bbox_coords, 'no_audio') and bbox.bbox.type not in ['channel', 'rolling news']:#, x_margin=100, y_margin=100):
                             # print('YES')
                             bbox.bbox.type = 'subtitle'
 
@@ -752,12 +752,19 @@ def run(video_path, audio_save_path, shot_path, out_dir):
 
     for video_path in video_paths:
         # out_dir = "/home/hcari/trg/visualize"
+        print('HERE 1')
         video = Video(video_path, audio_save_path, shot_path)
+        print('HERE 2')
         video.generate_bboxes()
+        print('HERE 3')
         video.first_stage_classify_bboxes()
+        print('HERE 4')
         video.merge_bboxes()
+        print('HERE 5')
         video.check_subtitles()
+        print('HERE 6')
         video.compare_shots()
+        print('HERE 7')
         video.check_no_audio_subtitle()
         video.none_to_st()
         # video.check_bounding_boxes_group()
@@ -765,9 +772,9 @@ def run(video_path, audio_save_path, shot_path, out_dir):
 
 # video_path = "/home/hcari/trg/videos/"
 # audio_save_path = "/home/hcari/trg/visualize/wav_files"
-video_path = '../montage_detection/sinovac_ver/query_video/ChineseSinovacVideo.mp4'
+video_path = '../montage_detection/sinovac_ver/ref_video/nov_3jnLn2w.mp4'
 audio_save_path = '../non_commit_trg/audio'
-shot_path = '../montage_detection/images/sinovac/query'
+shot_path = '../montage_detection/images/sinovac/db'
 out_dir = '../non_commit_trg/output'
 
 # video_paths = ["/home/hcari/trg/videos/First day of Sinovac vaccine roll-out – one clinic shares experience _ THE BIG STORY [MucpzHvMKkw].mp4"]
