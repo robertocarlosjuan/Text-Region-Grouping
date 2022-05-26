@@ -1,0 +1,7 @@
+1. write segments into video
+shot_main.py video /hdd1/user/xxuhong/AHAMO/videoDatasets/SingaporeCovidPassport/videos  /hdd1/user/xxuhong/AHAMO/videoDatasets/SingaporeCovidPassport/shotRlt 2
+
+
+2. sample a keyframe (middle frame) for each segment
+shot_main.py image /hdd1/user/xxuhong/AHAMO/videoDatasets/SingaporeCovidPassport/videos /hdd1/user/xxuhong/AHAMO/videoDatasets/SingaporeCovidPassport/shotRlt  2
+
