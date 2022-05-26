@@ -1,5 +1,6 @@
 from lib2to3.pgen2.literals import simple_escapes
 import os
+import re
 import json
 import math
 import argparse
@@ -7,10 +8,12 @@ import statistics
 import numpy as np
 import cv2
 from PIL import Image
+from tqdm import tqdm
 from config import *
 from paddleocr import draw_ocr
 from shapely.geometry import Polygon
 import xml.etree.cElementTree as ET
+from Levenshtein import distance as lev
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -106,20 +109,19 @@ def draw_bounding(img_path, ocr_bboxes, output_dir=None, label="_bbox"):
         output_path = output_dir
     im_show.save(output_path)
 
-def overlap(coord1, coord2):
+def overlap(coord1, coord2, type='', x_margin=100, y_margin=10):
     # union_area = Polygon(self.coords).union(Polygon(new_coords)).area
     # # if union_area - Polygon(self.coords).area == 0 or union_area - Polygon(new_coords).area < 10:
     # #     return True
     # iou = Polygon(self.coords).intersection(Polygon(new_coords)).area / union_area
     # return iou > iou_threshold
     mismatch = False
-    x_margin = 100
-    y_margin = 20
     # coords = [item for sublist in self.coords for item in sublist]
     # new_coords = [item for sublist in new_coords for item in sublist]
-    coords = [coord1[0][0], coord1[0][1], coord1[2][0], coord1[2][1]]
-    new_coords = [coord2[0][0], coord2[0][1], coord2[2][0], coord2[2][1]]
-    for i, (p, c) in enumerate(zip(coords, new_coords)):
+    if type not in ['shot', 'no_audio']:
+        coord1 = [coord1[0][0], coord1[0][1], coord1[2][0], coord1[2][1]]
+        coord2 = [coord2[0][0], coord2[0][1], coord2[2][0], coord2[2][1]]
+    for i, (p, c) in enumerate(zip(coord1, coord2)):
         if i%2 == 0:
             margin = x_margin
         else:
@@ -425,7 +427,87 @@ def save_known_channels(known_channels, known_channels_path):
     with open(known_channels_path, "w") as f:
         f.write("\n".join(known_channels))
 
+def atoi(text):
+    return int(text) if text.isdigit() else text
 
+def natural_keys(text):
+    return [ atoi(c) for c in re.split(r'(\d+)', text) ]
+
+def track_bboxes(frames, type='', x_margin=100, y_margin=10, lead=0):
+    bbox_dict = {}
+    bbox_hist = []
+    feature_frame_idx = []
+    for idx, frame in tqdm(enumerate(frames)):
+        if type != 'no_audio':
+            ocr_bboxes = ocr.ocr(frame, cls=True)
+        else:
+            ocr_bboxes = frame
+        if type not in ['shot', 'no_audio']:
+            classifier_results = classify(frame)
+            if classifier_results[0]['label'] == 'Feature frame':
+                feature_frame_idx.append(idx)
+
+        coors_to_delete = []
+        for tracked_coor, value in bbox_dict.items():
+            frame_range = value[0]
+            tracked_text = value[-1][0]
+            continued = False
+            for curr_bbox in ocr_bboxes:
+                curr_text = curr_bbox[-1][0]
+                curr_coor = tuple([curr_bbox[0][0][0], curr_bbox[0][0][1], curr_bbox[0][2][0], curr_bbox[0][2][1]])
+                if overlap(tracked_coor, curr_coor, type, x_margin, y_margin) and idx == frame_range[-1] + 1 and lev(curr_text, tracked_text) < 10:
+                    bbox_dict[tracked_coor][0][-1] = idx
+                    continued = True
+                    break
+            if not continued:
+                coors_to_delete.append(tracked_coor)
+                if frame_range[-1] - frame_range[0] >= 0:
+                    frame_range[0] += lead
+                    frame_range[-1] += lead
+                    bbox_hist.append([tracked_coor, frame_range, tracked_text])
+        
+        for curr_bbox in ocr_bboxes:
+            curr_text = curr_bbox[-1]
+            curr_coor = tuple([curr_bbox[0][0][0], curr_bbox[0][0][1], curr_bbox[0][2][0], curr_bbox[0][2][1]])
+            already_tracked = False
+            for tracked_coor, frame_range in bbox_dict.items():
+                if overlap(tracked_coor, curr_coor, type, x_margin, y_margin):
+                    already_tracked = True
+                    break
+            if not already_tracked:
+                bbox_dict[curr_coor] = [[idx, idx], curr_text]
+
+        for coor in coors_to_delete:
+            del bbox_dict[coor]
+
+    return bbox_hist, feature_frame_idx
+
+def find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, height):
+    # Condition for detecting subtitle bbox
+    in_ms = num_frames * sample_rate
+    if in_ms >= 0 and in_ms <= 4000 and bbox[0][1] >= int(height/1.5):
+        subtitle_bboxes.append(bbox)
+
+def find_scene_text(shot_bbox_hist, shot_info):
+    scene_text_bboxes = []
+    for bbox in shot_bbox_hist:
+        frame_range = bbox[1]
+        num_frames = frame_range[-1] - frame_range[0]
+        # Detect scene text
+        if num_frames > 0:
+            continue
+        else:
+            shot_row = shot_info.loc[shot_info[0]==frame_range[0]]
+            start_frame = list(shot_row[1])[0]
+            end_frame = list(shot_row[2])[0]
+            scene_text_bboxes.append([bbox[0], [start_frame, end_frame], bbox[-1]])
+
+    return scene_text_bboxes
+
+def translate_frame(fps, frame_no):
+    frame_gap = int(sample_rate/fps)
+    
+    return frame_gap*frame_no
 
 # def shortened_norm_edit_sim(s1, s2):
 #     s1 = s1[0] if type(s1)==tuple else s1
