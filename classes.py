@@ -3,7 +3,7 @@ import cv2
 import subprocess
 import numpy as np
 import pandas as pd
-from glob import glob
+import glob
 from tqdm import tqdm
 import speech_recognition as sr
 from pydub import AudioSegment
@@ -579,8 +579,14 @@ class Video:
         out = cv2.VideoWriter(out_file, fourcc, fps, (width, height))
         for frame in self.frames:
             frame.generate_bbox_list()
-            for bbox in frame.bboxes:
-                frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(bbox.type), get_plot_coords(bbox.overall_coords), (0,0,0))
+            for bbox_inst in frame.bbox_instances:
+                bbox_type = bbox_inst.type
+                coordinates = bbox_inst.coords
+                if bbox_inst.bbox is not None:
+                    if bbox_type is not None:
+                        bbox_type = bbox_inst.bbox.type
+                    coordinates = bbox_inst.bbox.overall_coords
+                frame.image_w_bbox = plot_bbox(frame.image_w_bbox, str(bbox_type), get_plot_coords(coordinates), (0,0,0))
             out.write(frame.image_w_bbox)
         out.release()
         cap.release()
@@ -649,7 +655,8 @@ class Video:
     def compare_shots(self):
         shot_key_frame_detect(self.video_path, self.shot_path)
         shot_info = pd.read_csv('{}/{}.txt'.format(self.shot_path, self.base_filename), sep=' ', header=None)
-        shots = glob('{}/{}_*.jpg'.format(shot_path, self.base_filename))
+        print(self.shot_path, self.base_filename)
+        shots = glob.glob(glob.escape(os.path.join(self.shot_path, self.base_filename))+"_*.jpg")
         shots.sort(key=natural_keys)
         shot_bbox_hist, _ = track_bboxes(shots,'shot')
         scene_text_bboxes = find_scene_text(shot_bbox_hist, shot_info)
@@ -744,14 +751,37 @@ class Video:
                 if bbox.bbox.type == None:
                     bbox.bbox.type = 'scene text'
 
-def run(video_path, audio_save_path, shot_path, out_dir): 
+    def generate_xml(self, xml_dir):
+        # bbox format [[topleftx, toplefty,botrightx, botrighty], [frame_start, ..., frame_end], text]
+        xml_string = ['<detection_list>\n']
+        for frame in self.frames:
+            xml_string.append('\t<frame index={}>\n'.format(frame.frame_no))
+            for bbox_inst in frame.bbox_instances:
+                bbox_type = None
+                if bbox_inst.type is not None:
+                    bbox_type = bbox_inst.type 
+                elif bbox_inst.bbox is not None and bbox_inst.bbox.type is not None:
+                    bbox_type = bbox_inst.bbox.type
+                xml_string.append('\t\t<detection type={}>\n'.format(bbox_type))
+                xml_string.append('\t\t\t<bbox>\n\t\t\t\t<topleft>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</topleft>\n'.format(bbox_inst.coords[0], bbox_inst.coords[1]))
+                xml_string.append('\t\t\t\t<botright>\n\t\t\t\t\t<x>{}</x>\n\t\t\t\t\t<y>{}</y>\n\t\t\t\t</botright>\n\t\t\t</bbox>\n'.format(bbox_inst.coords[2], bbox_inst.coords[-1]))
+                xml_string.append('\t\t\t<text>{}</text>\n<\t\t</detection>\n'.format(bbox_inst.text))
+            xml_string.append('\t</frame>\n')
+        xml_string.append('</detection_list>')
+        xml_string = ''.join(xml_string)
+        xml_filename = "{}/{}.xml".format(xml_dir, self.base_filename)
+        xml_file = open(xml_filename, "w")
+        xml_file.write(xml_string)
+        xml_file.close()
+        print('Saved to {}'.format(xml_filename))
+
+def run(video_path, audio_save_path, shot_path, out_dir, xml_dir): 
     if os.path.isfile(video_path):
         video_paths = [video_path]
     else:
         video_paths = [os.path.join(video_path, x) for x in os.listdir(video_path)]
 
     for video_path in video_paths:
-        # out_dir = "/home/hcari/trg/visualize"
         print('HERE 1')
         video = Video(video_path, audio_save_path, shot_path)
         print('HERE 2')
@@ -766,16 +796,11 @@ def run(video_path, audio_save_path, shot_path, out_dir):
         video.compare_shots()
         print('HERE 7')
         video.check_no_audio_subtitle()
+        print('HERE 8')
         video.none_to_st()
         # video.check_bounding_boxes_group()
+        print('HERE 9')
         video.save_to_video(out_dir)
-
-# video_path = "/home/hcari/trg/videos/"
-# audio_save_path = "/home/hcari/trg/visualize/wav_files"
-video_path = '../montage_detection/sinovac_ver/ref_video/nov_3jnLn2w.mp4'
-audio_save_path = '../non_commit_trg/audio'
-shot_path = '../montage_detection/images/sinovac/db'
-out_dir = '../non_commit_trg/output'
-
-# video_paths = ["/home/hcari/trg/videos/First day of Sinovac vaccine roll-out – one clinic shares experience _ THE BIG STORY [MucpzHvMKkw].mp4"]
-run(video_path, audio_save_path, shot_path, out_dir)
+        print('HERE 10')
+        video.generate_xml(xml_dir)
+        print("done")
