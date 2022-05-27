@@ -686,19 +686,22 @@ class Video:
                 filtered_silent_frames.append(frames)
             prev_frames = frames
         
+        print(filtered_silent_frames)
         subtitle_bboxes = []
         for silence in filtered_silent_frames:
-            frame_bboxes = []
-            for idx in range(silence[0], silence[-1]):
-                frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
-            bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', lead=silence[0])
-            
-            # print('BBOX HIST', bbox_hist)
-            for bbox in bbox_hist:
-                frame_range = bbox[1]
-                num_frames = frame_range[-1] - frame_range[0]
-                # Detect subtitle bbox
-                find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
+            num_frames  = silence[-1] - silence[0] 
+            if num_frames * sample_rate >= 10000:
+                frame_bboxes = []
+                for idx in range(silence[0], silence[-1]):
+                    frame_bboxes.append([(bbox.coords, (bbox.text, None)) for bbox in self.frames[idx].bbox_instances])
+                bbox_hist, _ = track_bboxes(frame_bboxes, 'no_audio', lead=silence[0])
+                
+                # print('BBOX HIST', bbox_hist)
+                for bbox in bbox_hist:
+                    frame_range = bbox[1]
+                    num_frames = frame_range[-1] - frame_range[0]
+                    # Detect subtitle bbox
+                    find_subtitle_bbox(subtitle_bboxes, num_frames, bbox, self.height)
 
         # subtitle_bboxes = []
         # frame_bboxes = []
@@ -722,8 +725,10 @@ class Video:
                         bbox_coords = [bbox.coords[0][0], bbox.coords[0][1], bbox.coords[2][0], bbox.coords[2][1]]
                         # print(sub_bbox[-1], sub_bbox[0], bbox_coords)
                         if overlap(sub_bbox[0], bbox_coords, 'no_audio') and bbox.bbox.type not in ['channel', 'rolling news']:#, x_margin=100, y_margin=100):
-                            # print('YES')
+                            # print(frame.frame_no, sub_bbox[-1], bbox.text)
                             bbox.bbox.type = 'subtitle'
+                else:
+                    continue
 
         # print('BEFORE', silent_frames)
         # print('AFTER', filtered_silent_frames)
@@ -743,6 +748,9 @@ class Video:
             for bbox in frame.bbox_instances:
                 if bbox.bbox.type == None:
                     bbox.bbox.type = 'scene text'
+                
+                if bbox.bbox.type == 'subtitle':
+                    print(frame.frame_no, bbox.text)
 
 def run(video_path, audio_save_path, shot_path, out_dir): 
     if os.path.isfile(video_path):
@@ -752,19 +760,12 @@ def run(video_path, audio_save_path, shot_path, out_dir):
 
     for video_path in video_paths:
         # out_dir = "/home/hcari/trg/visualize"
-        print('HERE 1')
         video = Video(video_path, audio_save_path, shot_path)
-        print('HERE 2')
         video.generate_bboxes()
-        print('HERE 3')
         video.first_stage_classify_bboxes()
-        print('HERE 4')
         video.merge_bboxes()
-        print('HERE 5')
         video.check_subtitles()
-        print('HERE 6')
         video.compare_shots()
-        print('HERE 7')
         video.check_no_audio_subtitle()
         video.none_to_st()
         # video.check_bounding_boxes_group()
@@ -772,7 +773,7 @@ def run(video_path, audio_save_path, shot_path, out_dir):
 
 # video_path = "/home/hcari/trg/videos/"
 # audio_save_path = "/home/hcari/trg/visualize/wav_files"
-video_path = '../montage_detection/sinovac_ver/ref_video/nov_3jnLn2w.mp4'
+video_path = '../montage_detection/sinovac_ver/ref_video/Fl-VIyIIYCk.mp4'
 audio_save_path = '../non_commit_trg/audio'
 shot_path = '../montage_detection/images/sinovac/db'
 out_dir = '../non_commit_trg/output'
